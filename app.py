@@ -1,15 +1,22 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask_cors import CORS
 import pandas as pd
 import os
+import json
+from datetime import datetime
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import InstalledAppFlow, Flow
 from googleapiclient.discovery import build
 
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'  # Allow HTTP for local dev
+
 app = Flask(__name__)
+app.secret_key = os.urandom(24)
+CORS(app, supports_credentials=True)
 
 # --- ML Model Training ---
 print("Training ML Model on mail_data.csv...")
@@ -25,6 +32,8 @@ model = MultinomialNB()
 model.fit(X_vec, y)
 print("ML Model training complete.")
 
+HISTORY_CSV = 'scan_history.csv'
+
 def predict_spam(message):
     if not message or not isinstance(message, str):
         message = ""
@@ -32,18 +41,39 @@ def predict_spam(message):
     prediction = model.predict(msg_vec)[0]
     probs = model.predict_proba(msg_vec)[0]
     spam_index = list(model.classes_).index("SPAM")
-    ham_index = list(model.classes_).index("HAM")
     
-    if prediction == "SPAM":
-        score = round(probs[spam_index] * 100, 1)
+    # Always return spam probability as score (high = spam, low = safe)
+    spam_score = round(probs[spam_index] * 100, 1)
+    return prediction, spam_score
+
+
+def save_to_history(sender, message, result, score, source="manual"):
+    """Save scan result to CSV history."""
+    new_row = pd.DataFrame([{
+        'Date': datetime.now().isoformat(),
+        'Sender': sender,
+        'Message': message[:200],
+        'Result': result,
+        'Score': score,
+        'Source': source
+    }])
+    if os.path.exists(HISTORY_CSV):
+        existing = pd.read_csv(HISTORY_CSV)
+        combined = pd.concat([new_row, existing], ignore_index=True)
+        # Keep only last 200 records
+        combined = combined.head(200)
     else:
-        score = round(probs[ham_index] * 100, 1)
-        
-    return prediction, f"{score}%"
+        combined = new_row
+    combined.to_csv(HISTORY_CSV, index=False)
 
 
 # --- Gmail API Setup ---
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+SCOPES = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'openid'
+]
 
 def get_gmail_service():
     creds = None
@@ -70,7 +100,8 @@ def home():
     if request.method == "POST":
         email_text = request.form.get("email_text", "")
         if email_text.strip():
-            result, score = predict_spam(email_text)
+            result, raw_score = predict_spam(email_text)
+            score = f"{raw_score}%"
         else:
             error = "Please enter some text."
 
@@ -132,19 +163,224 @@ def fetch_gmail():
                 sender = row['Sender']
                 snippet = str(row['Message']) if pd.notna(row['Message']) else ""
                 
-                prediction, score = predict_spam(snippet)
+                prediction, raw_score = predict_spam(snippet)
                 
                 emails_data.append({
                     'sender': sender,
                     'snippet': snippet,
                     'result': prediction,
-                    'score': score
+                    'score': f"{raw_score}%"
                 })
             
     except Exception as e:
         error = f"Gmail Fetch Error: {str(e)}"
         
     return render_template("index.html", emails=emails_data, error=error)
+
+
+# --- Google OAuth Authentication Routes ---
+
+def get_google_flow():
+    """Create a Google OAuth2 flow for web login."""
+    # Read credentials.json and adapt for web flow
+    with open('credentials.json', 'r') as f:
+        cred_data = json.load(f)
+    
+    # Convert installed app credentials to web format
+    client_config = {
+        'web': {
+            'client_id': cred_data['installed']['client_id'],
+            'client_secret': cred_data['installed']['client_secret'],
+            'auth_uri': cred_data['installed']['auth_uri'],
+            'token_uri': cred_data['installed']['token_uri'],
+            'redirect_uris': ['http://localhost:5000/api/auth/google/callback']
+        }
+    }
+    
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=SCOPES,
+        redirect_uri='http://localhost:5000/api/auth/google/callback'
+    )
+    return flow
+
+
+@app.route("/api/auth/google/login", methods=["GET"])
+def google_login():
+    """Redirect user to Google OAuth consent screen."""
+    flow = get_google_flow()
+    authorization_url, state = flow.authorization_url(
+        access_type='offline',
+        include_granted_scopes='true',
+        prompt='consent'
+    )
+    # Store state and PKCE code_verifier in session for callback
+    session['oauth_state'] = state
+    session['code_verifier'] = flow.code_verifier
+    return redirect(authorization_url)
+
+
+@app.route("/api/auth/google/callback", methods=["GET"])
+def google_callback():
+    """Handle Google OAuth callback, fetch user info, save token."""
+    flow = get_google_flow()
+    # Restore PKCE code_verifier from session
+    flow.code_verifier = session.pop('code_verifier', None)
+    flow.fetch_token(authorization_response=request.url)
+    
+    credentials = flow.credentials
+    
+    # Save token for Gmail API access
+    with open('token.json', 'w') as token_file:
+        token_file.write(credentials.to_json())
+    
+    # Get user info from Google
+    from google.oauth2 import id_token
+    from google.auth.transport import requests as google_requests
+    
+    try:
+        user_info_service = build('oauth2', 'v2', credentials=credentials)
+        user_info = user_info_service.userinfo().get().execute()
+        
+        session['user'] = {
+            'email': user_info.get('email', ''),
+            'name': user_info.get('name', user_info.get('email', '').split('@')[0]),
+            'picture': user_info.get('picture', '')
+        }
+    except Exception as e:
+        print(f"Error fetching user info: {e}")
+        session['user'] = {
+            'email': 'user@gmail.com',
+            'name': 'User',
+            'picture': ''
+        }
+    
+    # Redirect to frontend dashboard
+    return redirect('http://localhost:8080/dashboard')
+
+
+@app.route("/api/auth/user", methods=["GET"])
+def get_user():
+    """Return current authenticated user info."""
+    user = session.get('user')
+    if user:
+        return jsonify({"authenticated": True, "user": user})
+    return jsonify({"authenticated": False, "user": None})
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    """Clear user session."""
+    session.pop('user', None)
+    return jsonify({"status": "logged_out"})
+
+
+# --- JSON API Routes for React Frontend ---
+
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/analyze", methods=["POST"])
+def api_analyze():
+    data = request.get_json()
+    email_text = data.get("email_text", "") if data else ""
+
+    if not email_text.strip():
+        return jsonify({"error": "Please enter some text."}), 400
+
+    result, score = predict_spam(email_text)
+    
+    # Save to CSV history
+    save_to_history("Manual Input", email_text, result, score, source="manual")
+    
+    return jsonify({
+        "result": result,
+        "score": score,
+        "isSpam": result == "SPAM"
+    })
+
+
+@app.route("/api/fetch-gmail", methods=["POST"])
+def api_fetch_gmail():
+    try:
+        service = get_gmail_service()
+        results = service.users().messages().list(userId='me', maxResults=20).execute()
+        messages = results.get('messages', [])
+
+        if not messages:
+            return jsonify({"emails": [], "message": "No recent messages found."})
+
+        emails_data = []
+        for m in messages:
+            msg_id = m['id']
+            try:
+                msg = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
+                snippet = msg.get('snippet', '')
+
+                headers = msg.get('payload', {}).get('headers', [])
+                sender = "Unknown Sender"
+                subject = "(No Subject)"
+                for h in headers:
+                    if h.get('name', '').lower() == 'from':
+                        sender = h.get('value')
+                    if h.get('name', '').lower() == 'subject':
+                        subject = h.get('value')
+
+                prediction, score = predict_spam(snippet)
+                
+                # Save each scanned email to CSV history
+                save_to_history(sender, snippet, prediction, score, source="gmail")
+                
+                emails_data.append({
+                    'sender': sender,
+                    'subject': subject,
+                    'snippet': snippet,
+                    'result': prediction,
+                    'score': score,
+                    'isSpam': prediction == "SPAM"
+                })
+            except Exception as inner_e:
+                print(f"Error fetching message {msg_id}: {inner_e}")
+                continue
+
+        return jsonify({"emails": emails_data})
+
+    except Exception as e:
+        return jsonify({"error": f"Gmail Fetch Error: {str(e)}"}), 500
+
+
+@app.route("/api/history", methods=["GET"])
+def api_history():
+    """Return scan history from CSV."""
+    if not os.path.exists(HISTORY_CSV):
+        return jsonify({"history": []})
+    
+    try:
+        df = pd.read_csv(HISTORY_CSV)
+        history = []
+        for _, row in df.iterrows():
+            history.append({
+                'date': str(row.get('Date', '')),
+                'sender': str(row.get('Sender', 'Unknown')),
+                'message': str(row.get('Message', '')),
+                'result': str(row.get('Result', '')),
+                'score': float(row.get('Score', 0)),
+                'source': str(row.get('Source', 'manual')),
+                'isSpam': str(row.get('Result', '')).upper() == 'SPAM'
+            })
+        return jsonify({"history": history})
+    except Exception as e:
+        return jsonify({"error": str(e), "history": []})
+
+
+@app.route("/api/history/clear", methods=["POST"])
+def api_clear_history():
+    """Clear scan history CSV."""
+    if os.path.exists(HISTORY_CSV):
+        os.remove(HISTORY_CSV)
+    return jsonify({"status": "cleared"})
 
 
 if __name__ == "__main__":
