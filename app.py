@@ -186,13 +186,15 @@ def get_google_flow():
     with open('credentials.json', 'r') as f:
         cred_data = json.load(f)
     
-    # Convert installed app credentials to web format
+    # Handle both 'web' and 'installed' credential types
+    cred_type = 'web' if 'web' in cred_data else 'installed'
+    
     client_config = {
         'web': {
-            'client_id': cred_data['installed']['client_id'],
-            'client_secret': cred_data['installed']['client_secret'],
-            'auth_uri': cred_data['installed']['auth_uri'],
-            'token_uri': cred_data['installed']['token_uri'],
+            'client_id': cred_data[cred_type]['client_id'],
+            'client_secret': cred_data[cred_type]['client_secret'],
+            'auth_uri': cred_data[cred_type]['auth_uri'],
+            'token_uri': cred_data[cred_type]['token_uri'],
             'redirect_uris': ['http://localhost:5000/api/auth/google/callback']
         }
     }
