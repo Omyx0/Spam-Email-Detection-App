@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+spam_env/
+
+# Sensitive / OAuth
+credentials.json
+token.json
+
+# Data files (regenerated at runtime)
+scan_history.csv
+fetched_emails.csv
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
