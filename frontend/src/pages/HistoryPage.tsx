@@ -31,6 +31,7 @@ const HistoryPage = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [filter, setFilter] = useState<"all" | "spam" | "safe">("all");
+  const [selectedItem, setSelectedItem] = useState<HistoryItem | null>(null);
 
   const fetchHistory = async () => {
     setLoading(true);
@@ -56,6 +57,18 @@ const HistoryPage = () => {
       setHistory([]);
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const deleteItem = async (id: string) => {
+    if (!confirm("Remove this audit shard permanently?")) return;
+    try {
+      const res = await fetch(`/api/history/delete/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setHistory(prev => prev.filter(item => item.id !== id));
+      }
+    } catch (e) {
+      console.error("Deletion failed:", e);
     }
   };
 
@@ -225,11 +238,17 @@ const HistoryPage = () => {
                           </button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="bg-background/90 backdrop-blur-2xl border-border/40 p-2 rounded-2xl min-w-[160px] shadow-2xl">
-                           <DropdownMenuItem className="p-3 text-xs font-bold uppercase tracking-widest cursor-pointer hover:bg-primary/10 hover:text-primary rounded-xl gap-2 transition-all">
-                             <ExternalLink className="h-3.5 w-3.5" />
-                             Reveal Details
+                           <DropdownMenuItem 
+                             onClick={() => setSelectedItem(item)}
+                             className="p-3 text-xs font-bold uppercase tracking-widest cursor-pointer hover:bg-primary/10 hover:text-primary rounded-xl gap-2 transition-all"
+                           >
+                             <RefreshCw className="h-3.5 w-3.5" />
+                             Details
                            </DropdownMenuItem>
-                           <DropdownMenuItem className="p-3 text-xs font-bold uppercase tracking-widest cursor-pointer text-destructive hover:bg-destructive/10 rounded-xl gap-2 transition-all">
+                           <DropdownMenuItem 
+                             onClick={() => deleteItem(item.id)}
+                             className="p-3 text-xs font-bold uppercase tracking-widest cursor-pointer text-destructive hover:bg-destructive/10 rounded-xl gap-2 transition-all"
+                           >
                              <Trash className="h-3.5 w-3.5" />
                              Delete Shard
                            </DropdownMenuItem>
@@ -243,6 +262,83 @@ const HistoryPage = () => {
           )}
         </div>
       </motion.div>
+
+      {/* Forensic Details Modal */}
+      <AnimatePresence>
+        {selectedItem && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedItem(null)}
+              className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="relative w-full max-w-2xl bg-card border border-border/40 rounded-[2rem] shadow-2xl overflow-hidden"
+            >
+              <div className={`h-2 w-full ${selectedItem.isSpam ? "bg-destructive" : "bg-primary"}`} />
+              <div className="p-8">
+                <div className="flex justify-between items-start mb-6">
+                  <div>
+                    <h2 className="text-2xl font-black uppercase tracking-tighter mb-1">
+                      Neural <span className="text-primary">Snapshot</span>
+                    </h2>
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-[.2em]">Audit ID: {selectedItem.id}</p>
+                  </div>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={() => setSelectedItem(null)}
+                    className="rounded-full hover:bg-white/5"
+                  >
+                    <RefreshCw className="h-4 w-4 rotate-45" />
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 mb-8">
+                  <div className="p-4 rounded-2xl bg-white/5 border border-white/5">
+                    <p className="text-[10px] font-black text-muted-foreground uppercase tracking-widest mb-1">Origin Sender</p>
+                    <p className="text-sm font-bold truncate">{selectedItem.sender}</p>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-white/5 border border-white/5">
+                    <p className="text-[10px] font-black text-muted-foreground uppercase tracking-widest mb-1">Audit Date</p>
+                    <p className="text-sm font-bold">{new Date(selectedItem.date).toLocaleString()}</p>
+                  </div>
+                </div>
+
+                <div className="mb-8">
+                  <p className="text-[10px] font-black text-muted-foreground uppercase tracking-widest mb-2">Payload Fragment</p>
+                  <div className="p-6 rounded-2xl bg-black/20 border border-white/5 font-mono text-sm leading-relaxed text-foreground/80">
+                    "{selectedItem.message}"
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between p-4 rounded-2xl bg-primary/5 border border-primary/20">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${selectedItem.isSpam ? "bg-destructive/20 text-destructive" : "bg-primary/20 text-primary"}`}>
+                      {selectedItem.isSpam ? <AlertTriangle className="h-5 w-5" /> : <Shield className="h-5 w-5" />}
+                    </div>
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-widest">Classification</p>
+                      <p className={`font-bold ${selectedItem.isSpam ? "text-destructive" : "text-primary"}`}>
+                        {selectedItem.isSpam ? "High Risk Spam" : "Verified Safe"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs font-black uppercase tracking-widest">Neural Confidence</p>
+                    <p className="text-2xl font-black tracking-tighter text-foreground">{selectedItem.score}%</p>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

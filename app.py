@@ -550,6 +550,29 @@ def api_clear_history():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
+@app.route("/api/history/delete/<doc_id>", methods=["DELETE"])
+def api_delete_history_item(doc_id):
+    """Delete a specific history shard by ID."""
+    if not db:
+        return jsonify({"status": "error", "message": "Firestore not initialized."}), 500
+        
+    try:
+        user_email = session.get('user', {}).get('email', 'anonymous@local') if session else 'anonymous@local'
+        doc_ref = db.collection('history').document(doc_id)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            return jsonify({"status": "error", "message": "Record not found."}), 404
+            
+        data = doc.to_dict()
+        if data.get('user_email') != user_email:
+            return jsonify({"status": "error", "message": "Unauthorized deletion attempt."}), 403
+            
+        doc_ref.delete()
+        return jsonify({"status": "deleted"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/api/analytics/charts", methods=["GET"])
 def api_analytics_charts():
     """Generate Matplotlib charts for user analytics."""
