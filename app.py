@@ -85,7 +85,8 @@ def categorize_spam(message):
         "Investment/Crypto Scam": [r"investment", r"crypto", r"bitcoin", r"double your money", r"guaranteed profit", r"wallet", r"earnings"],
         "Phishing/Account Verification": [r"verify your account", r"account suspended", r"password reset", r"unauthorized access", r"login attempt", r"action required", r"bank"],
         "Lottery/Prize Scam": [r"lottery", r"prize", r"winner", r"congratulations", r"won", r"claim your", r"jackpot", r"reward"],
-        "Invoice/Billing Scam": [r"invoice", r"billing", r"subscription", r"auto-renew", r"payment received", r"receipt", r"norton", r"mcafee"]
+        "Invoice/Billing Scam": [r"invoice", r"billing", r"subscription", r"auto-renew", r"payment received", r"receipt", r"norton", r"mcafee"],
+        "SMS/Promotional Spam": [r"freemsg", r"txt", r"std chgs", r"£", r"rcv", r"stop", r"win", r"prize", r"gift card", r"urgent.*action"]
     }
     
     for category, patterns in scam_patterns.items():
@@ -98,6 +99,10 @@ def categorize_spam(message):
 def predict_spam(message):
     if not message or not isinstance(message, str):
         message = ""
+    
+    # Run heuristics first for manual override
+    heuri_cat = categorize_spam(message)
+    
     msg_vec = vectorizer.transform([message])
     prediction = model.predict(msg_vec)[0]
     probs = model.predict_proba(msg_vec)[0]
@@ -106,9 +111,13 @@ def predict_spam(message):
     # Always return spam probability as score (high = spam, low = safe)
     spam_score = round(probs[spam_index] * 100, 1)
     
-    category = None
-    if prediction == "SPAM":
-        category = categorize_spam(message)
+    # HEURISTIC OVERRIDE: If we found a specific scam category, force SPAM result
+    if heuri_cat != "General Spam":
+        prediction = "SPAM"
+        spam_score = max(spam_score, 99.9) # Boost confidence
+        category = heuri_cat
+    else:
+        category = "General Spam" if prediction == "SPAM" else None
         
     return prediction, spam_score, category
 
@@ -356,8 +365,8 @@ def api_analyze():
 
     result, score, category = predict_spam(email_text)
     
-    # Save to CSV history
-    save_to_history("Manual Input", email_text, result, score, category=category, source="manual")
+    # Manual Input scans are now stateless (not saved to history as per user request)
+    # save_to_history("Manual Input", email_text, result, score, category=category, source="manual")
     
     return jsonify({
         "result": result,
