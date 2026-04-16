@@ -192,9 +192,9 @@ def get_google_flow():
     # Use 'web' credentials for production
     cred_section = cred_data.get('web') or cred_data.get('installed')
     
-    # PRODUCTION FIX: Hardcode the Render URL as the primary redirect
+    # PRODUCTION FIX: Hardcode the Vercel URL as the primary redirect
     if os.getenv("RENDER"):
-        current_base_url = "https://spam-email-detection-app-p51w.onrender.com"
+        current_base_url = "https://spam-email-detection-app-xi.vercel.app"
     else:
         # Fallback for local development
         try:
