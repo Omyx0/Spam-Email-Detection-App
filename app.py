@@ -182,25 +182,25 @@ if os.getenv("RENDER") or os.getenv("VERCEL"):
     )
 
 def get_google_flow():
-    """Create a Google OAuth2 flow for web login with dynamic URL detection."""
+    """Create a Google OAuth2 flow with hardcoded production URLs to prevent mismatch errors."""
     if not os.path.exists('credentials.json'):
         raise FileNotFoundError("Google Cloud 'credentials.json' missing from root directory.")
 
     with open('credentials.json', 'r') as f:
         cred_data = json.load(f)
 
-    cred_section = cred_data.get('installed') or cred_data.get('web')
+    # Use 'web' credentials for production
+    cred_section = cred_data.get('web') or cred_data.get('installed')
     
-    # Auto-detect the backend URL
-    # On Render, we want the https://... url. 
-    # request.host_url provides the current server's URL (e.g., https://spam-app.onrender.com/)
-    try:
-        current_base_url = request.host_url.rstrip('/')
-        # Replace http with https for production
-        if "onrender.com" in current_base_url:
-            current_base_url = current_base_url.replace("http://", "https://")
-    except:
-        current_base_url = os.getenv("BACKEND_URL", "http://localhost:5000").rstrip('/')
+    # PRODUCTION FIX: Hardcode the Render URL as the primary redirect
+    if os.getenv("RENDER"):
+        current_base_url = "https://spam-email-detection-app-p51w.onrender.com"
+    else:
+        # Fallback for local development
+        try:
+            current_base_url = request.host_url.rstrip('/')
+        except:
+            current_base_url = "http://localhost:5000"
     
     redirect_uri = f"{current_base_url}/api/auth/google/callback"
     
