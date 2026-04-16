@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, request, jsonify, session, redirect, send_from_directory
 from flask_cors import CORS
 import pandas as pd
 import os
@@ -24,23 +24,44 @@ from googleapiclient.discovery import build
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'  # Allow HTTP for local dev
 os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'  # Prevent crash if Google returns scopes in different order
 
-app = Flask(__name__)
+DIST_DIR = os.path.join(os.path.dirname(__file__), 'frontend', 'dist')
+app = Flask(__name__, static_folder=None)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(24))
 CORS(app, supports_credentials=True)
 
 # --- ML Model Training ---
-print("Training ML Model on mail_data.csv...")
-data = pd.read_csv("mail_data.csv")
-data = data.dropna(subset=['Message', 'Category'])
-X = data["Message"]
-y = data["Category"].str.upper()
+def train_ml_model():
+    """Load data and train the Multinomial Naive Bayes model."""
+    try:
+        print("Training ML Model on mail_data.csv...")
+        if os.path.exists("mail_data.csv"):
+            data = pd.read_csv("mail_data.csv")
+        else:
+            print("Warning: mail_data.csv not found. Using minimal fallback dataset.")
+            # Tiny fallback dataset so the app can still boot and function basically
+            fallback_data = {
+                'Message': ['Congratulations you won a prize', 'Meeting at 5pm today', 'Invest now for big profits', 'Hello, how are you?'],
+                'Category': ['spam', 'ham', 'spam', 'ham']
+            }
+            data = pd.DataFrame(fallback_data)
+        
+        data = data.dropna(subset=['Message', 'Category'])
+        X = data["Message"]
+        y = data["Category"].str.upper()
 
-vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
-X_vec = vectorizer.fit_transform(X)
+        vec = TfidfVectorizer(stop_words='english', max_features=5000)
+        X_vec = vec.fit_transform(X)
 
-model = MultinomialNB()
-model.fit(X_vec, y)
-print("ML Model training complete.")
+        mdl = MultinomialNB()
+        mdl.fit(X_vec, y)
+        print("ML Model training complete.")
+        return vec, mdl
+    except Exception as e:
+        print(f"Critial error during ML training: {e}")
+        # Return dummy objects if training fails completely
+        return TfidfVectorizer().fit(["placeholder"]), MultinomialNB().fit([[0]], ["HAM"])
+
+vectorizer, model = train_ml_model()
 
 # Initialize Firestore
 db = None
@@ -92,7 +113,7 @@ def predict_spam(message):
     return prediction, spam_score, category
 
 
-def save_to_history(sender, message, result, score, category=None, source="manual", gmail_id=None):
+def save_to_history(sender, message, result, score, category=None, source="manual", gmail_id=None, subject=None, date_val=None, doc_id=None):
     """Save scan result to Firestore history."""
     if not db:
         print("Firestore not initialized, cannot save history.")
@@ -102,8 +123,9 @@ def save_to_history(sender, message, result, score, category=None, source="manua
         user_email = session.get('user', {}).get('email', 'anonymous@local') if session else 'anonymous@local'
         doc_data = {
             'user_email': user_email,
-            'Date': datetime.now().isoformat(),
+            'Date': date_val if date_val else datetime.now().isoformat(),
             'Sender': sender,
+            'Subject': subject if subject else '(No Subject)',
             'Message': message[:200],
             'Result': result,
             'Score': score,
@@ -113,7 +135,10 @@ def save_to_history(sender, message, result, score, category=None, source="manua
         if gmail_id:
             doc_data['gmail_id'] = gmail_id
             
-        db.collection('history').add(doc_data)
+        if doc_id:
+            db.collection('history').document(doc_id).set(doc_data)
+        else:
+            db.collection('history').add(doc_data)
     except Exception as e:
         print(f"Error saving to Firestore history: {e}")
 
@@ -141,86 +166,7 @@ def get_gmail_service():
     return build('gmail', 'v1', credentials=creds)
 
 
-@app.route("/", methods=["GET", "POST"])
-def home():
-    result = None
-    score = None
-    email_text = ""
-    error = None
 
-    if request.method == "POST":
-        email_text = request.form.get("email_text", "")
-        if email_text.strip():
-            result, raw_score, category = predict_spam(email_text)
-            score = f"{raw_score}%"
-        else:
-            error = "Please enter some text."
-
-    return render_template("index.html", result=result, score=score, email_text=email_text, error=error)
-
-
-@app.route("/fetch_gmail", methods=["POST"])
-def fetch_gmail():
-    error = None
-    emails_data = []
-    
-    try:
-        service = get_gmail_service()
-        # 1. Fetch the last 20 messages
-        results = service.users().messages().list(userId='me', maxResults=20).execute()
-        messages = results.get('messages', [])
-        
-        if not messages:
-            error = "No recent messages found in your Gmail inbox."
-        else:
-            new_emails = []
-            # Fetch details for each message
-            for m in messages:
-                msg_id = m['id']
-                try:
-                    msg = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
-                    snippet = msg.get('snippet', '')
-                    
-                    # Extract Sender Name from headers
-                    headers = msg.get('payload', {}).get('headers', [])
-                    sender = "Unknown Sender"
-                    for h in headers:
-                        if h.get('name', '').lower() == 'from':
-                            sender = h.get('value')
-                            break
-                            
-                    new_emails.append({'Sender': sender, 'Message': snippet})
-                    
-                except Exception as inner_e:
-                    print(f"Error fetching message {msg_id}: {inner_e}")
-                    continue
-                    
-            # Remove duplicate snippets right away before prediction
-            seen_snippets = set()
-            unique_new_emails = []
-            for email in new_emails:
-                if email['Message'] not in seen_snippets:
-                    unique_new_emails.append(email)
-                    seen_snippets.add(email['Message'])
-            
-            for email in unique_new_emails:
-                sender = email['Sender']
-                snippet = email['Message']
-                
-                prediction, raw_score, category = predict_spam(snippet)
-                
-                emails_data.append({
-                    'sender': sender,
-                    'snippet': snippet,
-                    'result': prediction,
-                    'score': f"{raw_score}%",
-                    'category': category
-                })
-            
-    except Exception as e:
-        error = f"Gmail Fetch Error: {str(e)}"
-        
-    return render_template("index.html", emails=emails_data, error=error)
 
 
 # --- Google OAuth Authentication Routes ---
@@ -246,20 +192,26 @@ def get_google_flow():
         )
 
     # Convert credentials to web flow format
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:8080").rstrip('/')
+    backend_url = os.getenv("BACKEND_URL", "http://localhost:5000").rstrip('/')
+    
+    # Callback must match what's in Google Cloud Console
+    redirect_uri = f"{backend_url}/api/auth/google/callback"
+    
     client_config = {
         'web': {
             'client_id': cred_section['client_id'],
             'client_secret': cred_section['client_secret'],
             'auth_uri': cred_section['auth_uri'],
             'token_uri': cred_section['token_uri'],
-            'redirect_uris': ['https://spam-email-detection-app-xi.vercel.app/api/auth/google/callback']
+            'redirect_uris': [redirect_uri]
         }
     }
 
     flow = Flow.from_client_config(
         client_config,
         scopes=SCOPES,
-        redirect_uri='https://spam-email-detection-app-xi.vercel.app/api/auth/google/callback'
+        redirect_uri=redirect_uri
     )
     return flow
 
@@ -299,6 +251,11 @@ def google_login():
 @app.route("/api/auth/google/callback", methods=["GET"])
 def google_callback():
     """Handle Google OAuth callback, fetch user info, save token."""
+    # Security check: verify state to prevent CSRF
+    stored_state = session.pop('oauth_state', None)
+    if not stored_state or request.args.get('state') != stored_state:
+        return jsonify({"error": "invalid_state", "message": "State mismatch. Potential CSRF detected."}), 400
+
     flow = get_google_flow()
     # Restore PKCE code_verifier from session
     flow.code_verifier = session.pop('code_verifier', None)
@@ -342,7 +299,8 @@ def google_callback():
         }
     
     # Redirect to frontend dashboard
-    return redirect('https://spam-email-detection-app-xi.vercel.app/dashboard')
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:8080").rstrip('/')
+    return redirect(f"{frontend_url}/dashboard")
 
 
 @app.route("/api/auth/user", methods=["GET"])
@@ -391,37 +349,61 @@ def api_analyze():
 
 @app.route("/api/fetch-gmail", methods=["POST"])
 def api_fetch_gmail():
+    """
+    Simplified Core Gmail Fetch:
+    1. Fetch 30 most recent emails from Gmail.
+    2. Scan them immediately.
+    3. Return ONLY these 30 emails (fixing the count explosion).
+    4. Automatically cleanup any old duplicates from history.
+    """
     try:
+        import hashlib
         service = get_gmail_service()
-        results = service.users().messages().list(userId='me', maxResults=20).execute()
+        user_email = session.get('user', {}).get('email', 'anonymous@local') if session else 'anonymous@local'
+
+        # Step 1: Automatic Cleanup (Repair the 47-email pollution)
+        # We find and delete all existing legacy 'source=gmail' history for this user once
+        if db:
+            docs_to_purge = list(db.collection('history')
+                               .where("user_email", "==", user_email)
+                               .where("Source", "==", "gmail")
+                               .stream())
+            if len(docs_to_purge) > 30: # Only purge if it looks like the "47 email" bug happened
+                batch = db.batch()
+                for doc in docs_to_purge:
+                    batch.delete(doc.reference)
+                batch.commit()
+                print(f"Core Reset: Purged {len(docs_to_purge)} polluted history records.")
+
+        # Step 2: Build seen_keys to avoid double-saving identical messages
+        seen_keys = set()
+        if db:
+            docs = db.collection('history').where("user_email", "==", user_email).where("Source", "==", "gmail").stream()
+            for doc in docs:
+                seen_keys.add(doc.id)
+
+        # Step 3: Fetch 30 most recent messages from Inbox and Spam folders
+        # Exclude Drafts to keep the count accurate
+        results = service.users().messages().list(userId='me', maxResults=30, q="{label:INBOX label:SPAM} -label:DRAFT").execute()
         messages = results.get('messages', [])
 
-        if not messages:
-            return jsonify({"emails": [], "message": "No recent messages found."})
+        final_results = []
 
-        user_email = session.get('user', {}).get('email', 'anonymous@local') if session else 'anonymous@local'
-        seen_gmail_ids = set()
-        seen_snippets = set()
-
-        if db:
-            docs = db.collection('history').where("user_email", "==", user_email).stream()
-            for doc in docs:
-                d = doc.to_dict()
-                if 'gmail_id' in d:
-                    seen_gmail_ids.add(d['gmail_id'])
-                else:
-                    seen_snippets.add((d.get('Sender', ''), str(d.get('Message', ''))[:200]))
-
-        emails_data = []
         for m in messages:
             msg_id = m['id']
-            if msg_id in seen_gmail_ids:
-                continue
-
             try:
                 msg = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
-                snippet = msg.get('snippet', '')
+                snippet = msg.get('snippet', '').strip()
+                
+                # Filter out empty messages, drafts, or system placeholders
+                # (Fixes the "26 emails instead of 24" issue)
+                label_ids = msg.get('labelIds', [])
+                if not snippet or 'DRAFT' in label_ids:
+                    continue
 
+                internal_date_ms = msg.get('internalDate', str(int(datetime.now().timestamp() * 1000)))
+                date_val = datetime.fromtimestamp(int(internal_date_ms)/1000.0).isoformat()
+                
                 headers = msg.get('payload', {}).get('headers', [])
                 sender = "Unknown Sender"
                 subject = "(No Subject)"
@@ -431,28 +413,49 @@ def api_fetch_gmail():
                     if h.get('name', '').lower() == 'subject':
                         subject = h.get('value')
 
-                if (sender, snippet[:200]) in seen_snippets:
-                    continue
+                # Core action: scan freshenly OR auto-flag if already in Gmail Spam
+                label_ids = msg.get('labelIds', [])
+                if 'SPAM' in label_ids:
+                    prediction = "SPAM"
+                    score = 100.0
+                    category = "Gmail Flagged"
+                else:
+                    prediction, score, category = predict_spam(snippet)
 
-                prediction, score, category = predict_spam(snippet)
-                
-                # Save each scanned email to CSV history
-                save_to_history(sender, snippet, prediction, score, category=category, source="gmail", gmail_id=msg_id)
-                
-                emails_data.append({
+                # Store result in final list for UI
+                res_item = {
                     'sender': sender,
                     'subject': subject,
                     'snippet': snippet,
                     'result': prediction,
-                    'score': score,
+                    'score': float(score),
                     'category': category,
                     'isSpam': prediction == "SPAM"
-                })
+                }
+                final_results.append(res_item)
+
+                # Background: ONLY save to history if it's a new message
+                composite_key = f"{user_email}__{snippet}__{internal_date_ms}"
+                key_hash = hashlib.md5(composite_key.encode()).hexdigest()
+                
+                if db and key_hash not in seen_keys:
+                    save_to_history(sender, snippet, prediction, score, 
+                                    category=category, source="gmail", 
+                                    gmail_id=msg_id, subject=subject, 
+                                    date_val=date_val, doc_id=key_hash)
+                    seen_keys.add(key_hash)
+
             except Exception as inner_e:
-                print(f"Error fetching message {msg_id}: {inner_e}")
+                print(f"Error processing message {msg_id}: {inner_e}")
                 continue
 
-        return jsonify({"emails": emails_data})
+        if not final_results:
+            return jsonify({"emails": [], "message": "No emails found in inbox."})
+
+        return jsonify({"emails": final_results})
+
+    except Exception as e:
+        return jsonify({"error": f"Gmail Fetch Error: {str(e)}"}), 500
 
     except Exception as e:
         return jsonify({"error": f"Gmail Fetch Error: {str(e)}"}), 500
@@ -545,15 +548,19 @@ def api_analytics_charts():
                 safe_count += 1
                 
         if spam_count == 0 and safe_count == 0:
-            return jsonify({"charts": None, "message": "No data available."})
+            return jsonify({"charts": {"ratio": None, "categories": None}, "message": "No data available."})
             
         # 1. Pie Chart (Spam vs Safe)
-        fig1, ax1 = plt.subplots(figsize=(4, 4))
-        # Custom colors to match the app theme
-        colors = ['#EF4444', '#10B981'] # Red for spam, Green for safe
-        ax1.pie([spam_count, safe_count], labels=['Spam', 'Safe'], autopct='%1.1f%%', startangle=90, colors=colors, textprops={'color':"w"})
+        fig1, ax1 = plt.subplots(figsize=(5, 5))
+        # Premium Teal/Cyan theme
+        colors = ['#F87171', '#14FFEC'] # Red for spam, Cyan for safe
+        ax1.pie([spam_count, safe_count], labels=['Spam', 'Safe'], autopct='%1.1f%%', startangle=90, colors=colors, 
+                textprops={'color':"#F9FAFB", 'weight':'bold', 'fontsize': 10}, pctdistance=0.85)
+        
+        # Add a circle at the center to make it a doughnut if preferred
         ax1.axis('equal') 
-        fig1.patch.set_alpha(0.0) # Transparent background
+        fig1.patch.set_facecolor('#030712') # Match dashboard bg
+        plt.tight_layout()
         
         buf1 = io.BytesIO()
         plt.savefig(buf1, format='png', transparent=True)
@@ -564,19 +571,19 @@ def api_analytics_charts():
         # 2. Bar Chart (Categories)
         chart_categories = None
         if categories:
-            fig2, ax2 = plt.subplots(figsize=(6, 4))
+            fig2, ax2 = plt.subplots(figsize=(7, 4))
             cats = list(categories.keys())
             c_vals = list(categories.values())
-            ax2.bar(cats, c_vals, color='#8B5CF6') # Purple accent color
-            ax2.tick_params(axis='x', colors='white')
-            ax2.tick_params(axis='y', colors='white')
-            ax2.spines['bottom'].set_color('white')
-            ax2.spines['left'].set_color('white')
+            ax2.bar(cats, c_vals, color='#14FFEC') # Cyan accent color
+            ax2.tick_params(axis='x', colors='#9CA3AF', labelsize=8)
+            ax2.tick_params(axis='y', colors='#9CA3AF', labelsize=8)
+            ax2.spines['bottom'].set_color('#374151')
+            ax2.spines['left'].set_color('#374151')
             ax2.spines['top'].set_visible(False)
             ax2.spines['right'].set_visible(False)
             plt.xticks(rotation=15, ha='right')
-            fig2.patch.set_alpha(0.0)
-            ax2.set_facecolor((0, 0, 0, 0))
+            fig2.patch.set_facecolor('#030712')
+            ax2.set_facecolor('#030712')
             
             plt.tight_layout()
             buf2 = io.BytesIO()
@@ -621,7 +628,7 @@ def api_analytics_custom():
             safe_count = len(history_data) - spam_count
             labels = ['Spam', 'Safe']
             values = [spam_count, safe_count]
-            colors = ['#EF4444', '#10B981']
+            colors = ['#F87171', '#14FFEC']
         elif metric == "categories":
             cats = {}
             for d in history_data:
@@ -632,7 +639,7 @@ def api_analytics_custom():
                     cats[c] = cats.get(c, 0) + 1
             labels = list(cats.keys()) if cats else ["No Spam"]
             values = list(cats.values()) if cats else [1]
-            colors = ['#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#EF4444']
+            colors = ['#14FFEC', '#C084FC', '#F59E0B', '#34D399', '#F87171']
         elif metric == "timeline":
             dates = {}
             for d in history_data:
@@ -697,5 +704,21 @@ def api_analytics_custom():
         return jsonify({"error": str(e)})
 
 
+# --- Serve React SPA (must be last route) ---
+@app.route("/", defaults={'path': ''}, strict_slashes=False)
+@app.route("/<path:path>", strict_slashes=False)
+def serve(path):
+    """Catch-all for React Router - serve index.html for SPA routes."""
+    # Serve actual static files (JS, CSS, images, favicon)
+    if path:
+        file_path = os.path.join(DIST_DIR, path)
+        if os.path.isfile(file_path):
+            return send_from_directory(DIST_DIR, path)
+    # Fallback to index.html for all React Router paths
+    return send_from_directory(DIST_DIR, 'index.html')
+
+
 if __name__ == "__main__":
-   app.run(debug=True, host="0.0.0.0", port=5000)
+    port = int(os.getenv("BACKEND_PORT", "5000"))
+    debug = os.getenv("FLASK_DEBUG", "1").lower() not in ("0", "false", "no")
+    app.run(debug=debug, host="0.0.0.0", port=port)

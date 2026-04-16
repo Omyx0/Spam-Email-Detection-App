@@ -21,11 +21,11 @@ export const DashboardSidebar = ({ onClose }: { onClose: () => void }) => {
   };
 
   return (
-    <div className="h-full flex flex-col bg-sidebar border-r border-sidebar-border">
+    <div className="h-full flex flex-col bg-background/40 backdrop-blur-xl border-r border-border/40">
       <div className="p-6 flex items-center gap-2">
-        <Shield className="h-7 w-7 text-primary" />
-        <span className="font-bold text-lg text-foreground">
-          Spam<span className="text-gradient-primary">Guard</span>
+        <img src="/favicon.ico" alt="Logo" className="h-6 w-6" />
+        <span className="font-bold text-lg text-foreground tracking-tight">
+          Spam<span className="text-primary italic">Shield</span>
         </span>
       </div>
 
@@ -37,10 +37,10 @@ export const DashboardSidebar = ({ onClose }: { onClose: () => void }) => {
             end={link.end}
             onClick={onClose}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-4 py-3 rounded-xl text-sm transition-all ${
+              `flex items-center gap-3 px-4 py-3 rounded-xl text-sm transition-all duration-300 ${
                 isActive
-                  ? "bg-primary/10 text-primary font-medium"
-                  : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-foreground"
+                  ? "bg-primary/10 text-primary font-bold shadow-[0_0_15px_rgba(20,255,236,0.1)]"
+                  : "text-muted-foreground hover:bg-white/5 hover:text-foreground hover:translate-x-1"
               }`
             }
           >

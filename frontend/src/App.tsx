@@ -14,6 +14,7 @@ import HistoryPage from "./pages/HistoryPage";
 import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/SettingsPage";
 import VisualizationsPage from "./pages/VisualizationsPage";
+import Developers from "./pages/Developers";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -29,6 +30,7 @@ const App = () => (
             <Route path="/" element={<Index />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
+            {/* <Route path="/developers" element={<Developers />} /> */}
             <Route path="/dashboard" element={<DashboardLayout />}>
               <Route index element={<SpamDetector />} />
               <Route path="inbox" element={<InboxScanner />} />

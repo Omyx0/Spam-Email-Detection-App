@@ -1,45 +1,60 @@
-import { Shield } from "lucide-react";
+import { Github, Mail, Globe } from "lucide-react";
 import { Link } from "react-router-dom";
 
 export const LandingFooter = () => (
-  <footer className="border-t border-border py-12">
-    <div className="container mx-auto px-6">
-      <div className="grid md:grid-cols-4 gap-8">
-        <div>
-          <div className="flex items-center gap-2 mb-4">
-            <Shield className="h-6 w-6 text-primary" />
-            <span className="font-bold text-foreground">SpamGuard</span>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            AI-powered spam detection to keep your inbox safe and clean.
+  <footer className="border-t border-border/40 py-16 bg-background">
+    <div className="container mx-auto px-6 md:px-12">
+      <div className="grid md:grid-cols-4 gap-12">
+        <div className="col-span-2">
+          <Link to="/" className="flex items-center gap-2 group">
+            <div className="p-1 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
+              <img src="/favicon.ico" alt="SpamShield Logo" className="h-7 w-7" />
+            </div>
+            <span className="text-xl font-bold tracking-tight">
+              Spam<span className="text-primary">Shield</span>
+            </span>
+          </Link>
+          <p className="text-muted-foreground max-w-sm leading-relaxed mb-6">
+            Advanced AI-powered email security. Protect your inbox from phishing 
+            and spam using statistical machine learning models.
           </p>
+          <div className="flex gap-4">
+            <a href="https://github.com/SSbhadoria21/Spam-Email-Detection-App" target="_blank" rel="noreferrer" className="p-2 rounded-full bg-muted/50 hover:bg-primary/10 hover:text-primary transition-all">
+              <Github className="h-5 w-5" />
+            </a>
+            <a href="mailto:support@spamshield.ai" className="p-2 rounded-full bg-muted/50 hover:bg-primary/10 hover:text-primary transition-all">
+              <Mail className="h-5 w-5" />
+            </a>
+          </div>
         </div>
+        
         <div>
-          <h4 className="font-semibold text-foreground mb-3">Product</h4>
-          <ul className="space-y-2 text-sm text-muted-foreground">
-            <li><a href="#features" className="hover:text-primary transition-colors">Features</a></li>
-            <li><a href="#benefits" className="hover:text-primary transition-colors">Benefits</a></li>
-            <li><a href="#stats" className="hover:text-primary transition-colors">Statistics</a></li>
+          <h4 className="font-bold text-foreground mb-6 uppercase text-xs tracking-[0.2em]">Application</h4>
+          <ul className="space-y-4 text-sm text-muted-foreground">
+            <li><Link to="/#features" className="hover:text-primary transition-all">Features</Link></li>
+            <li><Link to="/dashboard" className="hover:text-primary transition-all">Safety Dashboard</Link></li>
+            <li><Link to="/dashboard/inbox" className="hover:text-primary transition-all">Gmail Scanner</Link></li>
+            {/* <li><Link to="/developers" className="hover:text-primary transition-all">Developers</Link></li> */}
           </ul>
         </div>
+
         <div>
-          <h4 className="font-semibold text-foreground mb-3">Company</h4>
-          <ul className="space-y-2 text-sm text-muted-foreground">
-            <li><span className="hover:text-primary transition-colors cursor-pointer">About</span></li>
-            <li><span className="hover:text-primary transition-colors cursor-pointer">Privacy</span></li>
-            <li><span className="hover:text-primary transition-colors cursor-pointer">Terms</span></li>
-          </ul>
-        </div>
-        <div>
-          <h4 className="font-semibold text-foreground mb-3">Get Started</h4>
-          <ul className="space-y-2 text-sm text-muted-foreground">
-            <li><Link to="/login" className="hover:text-primary transition-colors">Login</Link></li>
-            <li><Link to="/signup" className="hover:text-primary transition-colors">Sign Up</Link></li>
+          <h4 className="font-bold text-foreground mb-6 uppercase text-xs tracking-[0.2em]">Account</h4>
+          <ul className="space-y-4 text-sm text-muted-foreground">
+            <li><Link to="/login" className="hover:text-primary transition-colors">Sign In</Link></li>
+            <li><Link to="/signup" className="hover:text-primary transition-colors">Create Account</Link></li>
           </ul>
         </div>
       </div>
-      <div className="mt-10 pt-6 border-t border-border text-center text-sm text-muted-foreground">
-        © 2026 SpamGuard. All rights reserved.
+      
+      <div className="mt-16 pt-8 border-t border-border/40 flex flex-col md:flex-row justify-between items-center gap-4">
+        <p className="text-xs text-muted-foreground">
+          © {new Date().getFullYear()} SpamShield AI. Built for secure communication.
+        </p>
+        <div className="flex gap-8 text-xs text-muted-foreground/60">
+          <Link to="/" className="hover:text-primary transition-colors">Privacy Policy</Link>
+          <Link to="/" className="hover:text-primary transition-colors">Terms of Service</Link>
+        </div>
       </div>
     </div>
   </footer>
