@@ -3,12 +3,13 @@ from flask_cors import CORS
 import pandas as pd
 import os
 import json
+import hashlib
 from datetime import datetime
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, auth
 
 import io
 import base64
@@ -26,8 +27,8 @@ os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'  # Prevent crash if Google return
 
 DIST_DIR = os.path.join(os.path.dirname(__file__), 'frontend', 'dist')
 app = Flask(__name__, static_folder=None)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(24))
-CORS(app, supports_credentials=True)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "spam_shield_dev_secret_key_99")
+CORS(app, supports_credentials=True, origins=["http://localhost:8080", "http://127.0.0.1:8080"])
 
 # --- ML Model Training ---
 def train_ml_model():
@@ -131,7 +132,6 @@ def save_to_history(sender, message, result, score, category=None, source="manua
     try:
         user_email = session.get('user', {}).get('email', 'anonymous@local') if session else 'anonymous@local'
         doc_data = {
-            'user_email': user_email,
             'Date': date_val if date_val else datetime.now().isoformat(),
             'Sender': sender,
             'Subject': subject if subject else '(No Subject)',
@@ -144,10 +144,11 @@ def save_to_history(sender, message, result, score, category=None, source="manua
         if gmail_id:
             doc_data['gmail_id'] = gmail_id
             
+        history_ref = db.collection('users').document(user_email).collection('history')
         if doc_id:
-            db.collection('history').document(doc_id).set(doc_data)
+            history_ref.document(doc_id).set(doc_data)
         else:
-            db.collection('history').add(doc_data)
+            history_ref.add(doc_data)
     except Exception as e:
         print(f"Error saving to Firestore history: {e}")
 
@@ -160,18 +161,47 @@ SCOPES = [
     'openid'
 ]
 
-def get_gmail_service():
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+def save_user_token(email, creds):
+    """Save Google OAuth credentials to Firestore for a specific user."""
+    if not db:
+        return
+    try:
+        token_data = json.loads(creds.to_json())
+        db.collection('users').document(email).collection('private').document('credentials').set(token_data)
+        print(f"Token saved to Firestore for {email}")
+    except Exception as e:
+        print(f"Error saving token to Firestore: {e}")
+
+def load_user_token(email):
+    """Load Google OAuth credentials from Firestore for a specific user."""
+    if not db:
+        return None
+    try:
+        doc = db.collection('users').document(email).collection('private').document('credentials').get()
+        if doc.exists:
+            return Credentials.from_authorized_user_info(doc.to_dict(), SCOPES)
+    except Exception as e:
+        print(f"Error loading token from Firestore: {e}")
+    return None
+
+def get_gmail_service(email=None):
+    if not email:
+        email = session.get('user', {}).get('email')
+    
+    if not email:
+        raise ValueError("No user email found in session for Gmail service.")
+
+    creds = load_user_token(email)
+    
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
+            save_user_token(email, creds)
         else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+            # If no token exists, we expect the OAuth flow to handle creation
+            # Returning None so the caller can redirect to /api/auth/google/login
+            return None
+            
     return build('gmail', 'v1', credentials=creds)
 
 
@@ -189,6 +219,13 @@ if os.getenv("RENDER") or os.getenv("VERCEL"):
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_NAME='__Host-spam-shield-session' if not os.getenv("DEBUG") else 'spam-shield-session'
     )
+else:
+    # LOCAL DEV: Allow cookies across ports on localhost
+    app.config.update(
+        SESSION_COOKIE_SAMESITE='Lax',
+        SESSION_COOKIE_SECURE=False,
+        SESSION_COOKIE_HTTPONLY=True
+    )
 
 def get_google_flow():
     """Create a Google OAuth2 flow with hardcoded production URLs to prevent mismatch errors."""
@@ -205,11 +242,9 @@ def get_google_flow():
     if os.getenv("RENDER"):
         current_base_url = "https://spam-email-detection-app-xi.vercel.app"
     else:
-        # Fallback for local development
-        try:
-            current_base_url = request.host_url.rstrip('/')
-        except:
-            current_base_url = "http://localhost:5000"
+        # LOCAL DEV FIX: Google Console is sensitive to 'localhost' vs '127.0.0.1'.
+        # We force 'localhost:5000' to match the standard configuration in credentials.json.
+        current_base_url = "http://localhost:5000"
     
     redirect_uri = f"{current_base_url}/api/auth/google/callback"
     
@@ -267,7 +302,7 @@ def google_login():
     authorization_url, state = flow.authorization_url(
         access_type='offline',
         include_granted_scopes='true',
-        prompt='consent'
+        prompt='select_account consent'
     )
     # Store state and PKCE code_verifier in session for callback
     session['oauth_state'] = state
@@ -288,18 +323,15 @@ def google_callback():
     flow.code_verifier = session.pop('code_verifier', None)
     flow.fetch_token(authorization_response=request.url)
     
-    credentials = flow.credentials
-    
-    # Save token for Gmail API access
-    with open('token.json', 'w') as token_file:
-        token_file.write(credentials.to_json())
+    # Credentials are saved below after user info is fetched
     
     # Get user info from Google
     from google.oauth2 import id_token
     from google.auth.transport import requests as google_requests
     
     try:
-        user_info_service = build('oauth2', 'v2', credentials=credentials)
+        google_creds = flow.credentials
+        user_info_service = build('oauth2', 'v2', credentials=google_creds)
         user_info = user_info_service.userinfo().get().execute()
         
         session['user'] = {
@@ -308,14 +340,40 @@ def google_callback():
             'picture': user_info.get('picture', '')
         }
         
-        # Save to firestore
+        # Save token and profile to firestore
         if db:
             try:
                 user_email_key = session['user']['email']
                 if user_email_key:
                     db.collection('users').document(user_email_key).set(session['user'], merge=True)
+                    # Save the OAuth credentials specifically to this user's private collection
+                    save_user_token(user_email_key, google_creds)
+                    
+                    # Sync with Firebase Authentication Dashboard
+                    try:
+                        try:
+                            # Check if user already exists in Firebase Auth
+                            auth_user = auth.get_user_by_email(user_email_key)
+                            # Update existing user info
+                            auth.update_user(
+                                auth_user.uid,
+                                display_name=session['user']['name'],
+                                photo_url=session['user']['picture']
+                            )
+                            print(f"Firebase Auth: Updated existing user {user_email_key}")
+                        except auth.UserNotFoundError:
+                            # Create new user in Firebase Auth if they don't exist
+                            auth.create_user(
+                                email=user_email_key,
+                                display_name=session['user']['name'],
+                                photo_url=session['user']['picture'],
+                                email_verified=True
+                            )
+                            print(f"Firebase Auth: Created new user {user_email_key}")
+                    except Exception as auth_err:
+                        print(f"Background: Syncing with Firebase Auth Dashboard failed (this doesn't block the app): {auth_err}")
             except Exception as e:
-                print(f"Error saving user profile to Firestore: {e}")
+                print(f"Error saving user profile/token to Firestore: {e}")
                 
     except Exception as e:
         print(f"Error fetching user info: {e}")
@@ -337,7 +395,9 @@ def get_user():
     """Return current authenticated user info."""
     user = session.get('user')
     if user:
+        print(f"Auth Check: User {user.get('email')} is authenticated.")
         return jsonify({"authenticated": True, "user": user})
+    print("Auth Check: No user session found.")
     return jsonify({"authenticated": False, "user": None})
 
 
@@ -378,44 +438,25 @@ def api_analyze():
 
 @app.route("/api/fetch-gmail", methods=["POST"])
 def api_fetch_gmail():
-    """
-    Simplified Core Gmail Fetch:
-    1. Fetch 30 most recent emails from Gmail.
-    2. Scan them immediately.
-    3. Return ONLY these 30 emails (fixing the count explosion).
-    4. Automatically cleanup any old duplicates from history.
-    """
+    """Fetch 30 most recent emails from Gmail and scan them."""
     try:
-        import hashlib
-        service = get_gmail_service()
-        user_email = session.get('user', {}).get('email', 'anonymous@local') if session else 'anonymous@local'
+        user_email = session.get('user', {}).get('email')
+        if not user_email:
+            return jsonify({"error": "Unauthorized"}), 401
 
-        # Step 1: Automatic Cleanup (Repair the 47-email pollution)
-        # We find and delete all existing legacy 'source=gmail' history for this user once
-        if db:
-            docs_to_purge = list(db.collection('history')
-                               .where("user_email", "==", user_email)
-                               .where("Source", "==", "gmail")
-                               .stream())
-            if len(docs_to_purge) > 30: # Only purge if it looks like the "47 email" bug happened
-                batch = db.batch()
-                for doc in docs_to_purge:
-                    batch.delete(doc.reference)
-                batch.commit()
-                print(f"Core Reset: Purged {len(docs_to_purge)} polluted history records.")
+        service = get_gmail_service(user_email)
+        if not service:
+            return jsonify({"error": "gmail_auth_required", "message": "Please re-login to authorize Gmail access."}), 401
 
-        # Step 2: Build seen_keys to avoid double-saving identical messages
+        # Build seen_keys to avoid double-saving identical messages
         seen_keys = set()
         if db:
-            docs = db.collection('history').where("user_email", "==", user_email).where("Source", "==", "gmail").stream()
+            docs = db.collection('users').document(user_email).collection('history').where("Source", "==", "gmail").stream()
             for doc in docs:
                 seen_keys.add(doc.id)
 
-        # Step 3: Fetch 30 most recent messages from Inbox and Spam folders
-        # Exclude Drafts to keep the count accurate
         results = service.users().messages().list(userId='me', maxResults=30, q="{label:INBOX label:SPAM} -label:DRAFT").execute()
         messages = results.get('messages', [])
-
         final_results = []
 
         for m in messages:
@@ -423,9 +464,6 @@ def api_fetch_gmail():
             try:
                 msg = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
                 snippet = msg.get('snippet', '').strip()
-                
-                # Filter out empty messages, drafts, or system placeholders
-                # (Fixes the "26 emails instead of 24" issue)
                 label_ids = msg.get('labelIds', [])
                 if not snippet or 'DRAFT' in label_ids:
                     continue
@@ -434,58 +472,33 @@ def api_fetch_gmail():
                 date_val = datetime.fromtimestamp(int(internal_date_ms)/1000.0).isoformat()
                 
                 headers = msg.get('payload', {}).get('headers', [])
-                sender = "Unknown Sender"
-                subject = "(No Subject)"
+                sender, subject = "Unknown Sender", "(No Subject)"
                 for h in headers:
-                    if h.get('name', '').lower() == 'from':
-                        sender = h.get('value')
-                    if h.get('name', '').lower() == 'subject':
-                        subject = h.get('value')
+                    if h.get('name', '').lower() == 'from': sender = h.get('value')
+                    if h.get('name', '').lower() == 'subject': subject = h.get('value')
 
-                # Core action: scan freshenly OR auto-flag if already in Gmail Spam
-                label_ids = msg.get('labelIds', [])
                 if 'SPAM' in label_ids:
-                    prediction = "SPAM"
-                    score = 100.0
-                    category = "Gmail Flagged"
+                    prediction, score, category = "SPAM", 100.0, "Gmail Flagged"
                 else:
                     prediction, score, category = predict_spam(snippet)
 
-                # Store result in final list for UI
-                res_item = {
-                    'sender': sender,
-                    'subject': subject,
-                    'snippet': snippet,
-                    'result': prediction,
-                    'score': float(score),
-                    'category': category,
-                    'isSpam': prediction == "SPAM"
-                }
-                final_results.append(res_item)
+                final_results.append({
+                    'sender': sender, 'subject': subject, 'snippet': snippet,
+                    'result': prediction, 'score': float(score), 'category': category, 'isSpam': prediction == "SPAM"
+                })
 
-                # Background: ONLY save to history if it's a new message
                 composite_key = f"{user_email}__{snippet}__{internal_date_ms}"
                 key_hash = hashlib.md5(composite_key.encode()).hexdigest()
                 
                 if db and key_hash not in seen_keys:
-                    save_to_history(sender, snippet, prediction, score, 
-                                    category=category, source="gmail", 
-                                    gmail_id=msg_id, subject=subject, 
-                                    date_val=date_val, doc_id=key_hash)
+                    save_to_history(sender, snippet, prediction, score, category=category, source="gmail", 
+                                    gmail_id=msg_id, subject=subject, date_val=date_val, doc_id=key_hash)
                     seen_keys.add(key_hash)
-
             except Exception as inner_e:
                 print(f"Error processing message {msg_id}: {inner_e}")
                 continue
 
-        if not final_results:
-            return jsonify({"emails": [], "message": "No emails found in inbox."})
-
         return jsonify({"emails": final_results})
-
-    except Exception as e:
-        return jsonify({"error": f"Gmail Fetch Error: {str(e)}"}), 500
-
     except Exception as e:
         return jsonify({"error": f"Gmail Fetch Error: {str(e)}"}), 500
 
@@ -498,7 +511,7 @@ def api_history():
     
     try:
         user_email = session.get('user', {}).get('email', 'anonymous@local') if session else 'anonymous@local'
-        docs = db.collection('history').where("user_email", "==", user_email).stream()
+        docs = db.collection('users').document(user_email).collection('history').stream()
         
         all_docs = []
         for doc in docs:
@@ -538,7 +551,7 @@ def api_clear_history():
         user_email = session.get('user', {}).get('email', 'anonymous@local') if session else 'anonymous@local'
         
         # Use get() instead of stream() to prevent iterator mutation issues and use batch for reliability
-        docs = db.collection('history').where("user_email", "==", user_email).get()
+        docs = db.collection('users').document(user_email).collection('history').get()
         
         if docs:
             batch = db.batch()
@@ -558,15 +571,11 @@ def api_delete_history_item(doc_id):
         
     try:
         user_email = session.get('user', {}).get('email', 'anonymous@local') if session else 'anonymous@local'
-        doc_ref = db.collection('history').document(doc_id)
+        doc_ref = db.collection('users').document(user_email).collection('history').document(doc_id)
         doc = doc_ref.get()
         
         if not doc.exists:
             return jsonify({"status": "error", "message": "Record not found."}), 404
-            
-        data = doc.to_dict()
-        if data.get('user_email') != user_email:
-            return jsonify({"status": "error", "message": "Unauthorized deletion attempt."}), 403
             
         doc_ref.delete()
         return jsonify({"status": "deleted"})
@@ -581,7 +590,7 @@ def api_analytics_charts():
         
     try:
         user_email = session.get('user', {}).get('email', 'anonymous@local') if session else 'anonymous@local'
-        docs = db.collection('history').where("user_email", "==", user_email).stream()
+        docs = db.collection('users').document(user_email).collection('history').stream()
         
         spam_count = 0
         safe_count = 0
@@ -663,7 +672,7 @@ def api_analytics_custom():
     
     try:
         user_email = session.get('user', {}).get('email', 'anonymous@local') if session else 'anonymous@local'
-        docs = db.collection('history').where("user_email", "==", user_email).stream()
+        docs = db.collection('users').document(user_email).collection('history').stream()
         
         history_data = []
         for doc in docs:
