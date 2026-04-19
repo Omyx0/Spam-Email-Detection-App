@@ -510,15 +510,17 @@ def api_history():
         return jsonify({"history": [], "error": "Firestore not initialized."})
     
     try:
+        user_email = session.get('user', {}).get('email', 'anonymous@local') if session else 'anonymous@local'
         # Optimization: Sort and limit on server side (requires Firestore index)
-        # If index doesn't exist, we fallback to client-side sort but still stream for efficiency
         history_query = db.collection('users').document(user_email).collection('history')
         
+        needs_python_sort = False
         try:
             docs = history_query.order_by('Date', direction=firestore.Query.DESCENDING).limit(200).stream()
         except:
-            # Fallback for if index is missing in development
-            docs = history_query.stream()
+            # Fallback for if index is missing in development/production
+            docs = history_query.limit(200).stream()
+            needs_python_sort = True
             
         history = []
         for doc in docs:
@@ -536,6 +538,9 @@ def api_history():
                 'source': str(doc_dict.get('Source', 'manual')),
                 'isSpam': str(doc_dict.get('Result', '')).upper() == 'SPAM'
             })
+        if needs_python_sort:
+            history.sort(key=lambda x: x['date'], reverse=True)
+            
         return jsonify({"history": history})
     except Exception as e:
         return jsonify({"error": str(e), "history": []})
