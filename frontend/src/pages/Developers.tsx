@@ -13,45 +13,67 @@ const DeveloperCard = ({ dev, delay }: { dev: any, delay: number }) => (
     className="h-full"
   >
     <ThreeDCard className="h-full">
-      <div className="relative group p-1 h-full rounded-[2rem] bg-gradient-to-br from-primary/20 via-border/10 to-accent/20 border border-white/5 backdrop-blur-3xl overflow-hidden shadow-2xl">
-        <div className="bg-background/80 rounded-[calc(2rem-2px)] p-8 h-full flex flex-col items-center text-center">
-          <div className="relative mb-8">
-            <div className="absolute inset-0 bg-primary/20 rounded-full blur-2xl animate-pulse" />
-            <div className="relative h-32 w-32 rounded-full overflow-hidden border-4 border-primary/20 bg-muted flex items-center justify-center shadow-xl">
-              {dev.image ? (
-                <img src={dev.image} alt={dev.name} className="h-full w-full object-cover" />
-              ) : (
-                <span className="text-4xl font-black text-primary">{dev.name.charAt(0)}</span>
-              )}
+      <div className="relative group p-1.5 h-full rounded-[2.5rem] bg-gradient-to-br from-primary/20 via-border/10 to-accent/20 border border-white/5 backdrop-blur-3xl overflow-hidden shadow-2xl">
+        <div className="bg-background/80 rounded-[calc(2.5rem-2px)] p-8 h-full flex flex-col xl:flex-row items-center xl:items-start gap-8">
+          {/* Left Column: Image and Socials */}
+          <div className="flex flex-col items-center gap-5 shrink-0">
+            <div className="relative group/img">
+              <div className="absolute inset-0 bg-primary/20 rounded-[1.5rem] blur-xl group-hover/img:blur-2xl transition-all animate-pulse" />
+              <div className="relative h-40 w-40 rounded-[1.5rem] overflow-hidden border-4 border-primary/20 bg-muted shadow-2xl transition-transform duration-500 group-hover/img:scale-[1.02]">
+                {dev.image ? (
+                  <img src={dev.image} alt={dev.name} className="h-full w-full object-cover" />
+                ) : (
+                  <span className="text-5xl font-black text-primary">{dev.name.charAt(0)}</span>
+                )}
+              </div>
+              <div className="absolute -bottom-2 -right-2 h-10 w-10 rounded-xl bg-background border border-border flex items-center justify-center shadow-2xl z-10 text-primary group-hover/img:rotate-12 transition-transform">
+                <Code className="h-5 w-5" />
+              </div>
             </div>
-            <div className="absolute -bottom-2 -right-2 h-10 w-10 rounded-xl bg-background border border-border flex items-center justify-center shadow-2xl z-10">
-              <Code className="h-5 w-5 text-primary" />
+
+            {/* Social Icons */}
+            <div className="flex gap-2.5">
+              <a href={`mailto:${dev.social.email}`} className="p-2.5 rounded-xl bg-secondary/50 hover:bg-primary/20 hover:text-primary transition-all group/icon border border-border/50" target="_blank" rel="noopener noreferrer">
+                <Mail className="h-4 w-4 group-hover/icon:scale-110 transition-transform" />
+              </a>
+              <a href={dev.social.github} className="p-2.5 rounded-xl bg-secondary/50 hover:bg-primary/20 hover:text-primary transition-all group/icon border border-border/50" target="_blank" rel="noopener noreferrer">
+                <Github className="h-4 w-4 group-hover/icon:scale-110 transition-transform" />
+              </a>
+              <a href={dev.social.linkedin} className="p-2.5 rounded-xl bg-secondary/50 hover:bg-primary/20 hover:text-primary transition-all group/icon border border-border/50" target="_blank" rel="noopener noreferrer">
+                <Linkedin className="h-4 w-4 group-hover/icon:scale-110 transition-transform" />
+              </a>
             </div>
           </div>
 
-          <h3 className="text-2xl font-black mb-2 tracking-tighter text-foreground">{dev.name}</h3>
-          <div className="flex flex-col gap-1 mb-6">
-            <p className="text-primary text-[10px] font-black uppercase tracking-[0.2em] px-4 py-1.5 bg-primary/10 rounded-full border border-primary/20 w-fit mx-auto">
-              {dev.department}
-            </p>
-            <p className="text-muted-foreground text-[10px] font-bold uppercase tracking-widest mt-2">
-              Enrollment: <span className="text-foreground">{dev.enrollment}</span>
-            </p>
-            <p className="text-muted-foreground text-[10px] font-bold uppercase tracking-widest">
-              Session: <span className="text-foreground">{dev.session}</span>
-            </p>
-          </div>
+          {/* Right Column: Details */}
+          <div className="flex-1 flex flex-col items-center xl:items-start text-center xl:text-left h-full py-1">
+            <div className="space-y-1.5 mb-6">
+              <h3 className="text-3xl font-black tracking-tighter text-foreground leading-tight">{dev.name}</h3>
+              <p className="text-primary font-bold text-xs uppercase tracking-[0.2em]">{dev.role}</p>
+            </div>
 
-          <div className="mt-auto pt-6 flex gap-4 border-t border-border/40 w-full justify-center">
-            <a href={`mailto:${dev.social.email}`} className="p-3 rounded-2xl bg-secondary/50 hover:bg-primary/20 hover:text-primary transition-all group/icon" target="_blank" rel="noopener noreferrer">
-              <Mail className="h-5 w-5 group-hover/icon:scale-110 transition-transform" />
-            </a>
-            <a href={dev.social.github} className="p-3 rounded-2xl bg-secondary/50 hover:bg-primary/20 hover:text-primary transition-all group/icon" target="_blank" rel="noopener noreferrer">
-              <Github className="h-5 w-5 group-hover/icon:scale-110 transition-transform" />
-            </a>
-            <a href={dev.social.linkedin} className="p-3 rounded-2xl bg-secondary/50 hover:bg-primary/20 hover:text-primary transition-all group/icon" target="_blank" rel="noopener noreferrer">
-              <Linkedin className="h-5 w-5 group-hover/icon:scale-110 transition-transform" />
-            </a>
+            <div className="space-y-5 mb-8 w-full">
+              <p className="text-muted-foreground/80 text-[11px] font-black uppercase tracking-[0.2em] px-4 py-2 bg-primary/5 rounded-lg border border-primary/10 w-fit">
+                {dev.department}
+              </p>
+              
+              <div className="space-y-2 border-l-2 border-primary/20 pl-4 py-0.5">
+                <p className="text-muted-foreground text-[10px] font-bold uppercase tracking-widest leading-none">
+                  Enroll: <span className="text-foreground">{dev.enrollment}</span>
+                </p>
+                <p className="text-muted-foreground text-[10px] font-bold uppercase tracking-widest leading-none">
+                  Session: <span className="text-foreground">{dev.session}</span>
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-auto hidden xl:block">
+              <div className="px-3.5 py-1.5 rounded-md bg-secondary/30 border border-border/30 w-fit">
+                <p className="text-muted-foreground/50 text-[9px] font-bold uppercase tracking-[0.25em]">
+                  Student Dev Verified
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -114,6 +136,7 @@ const Developers = () => {
   const developers = [
     {
       name: "Prateek Amar Batham",
+      role: "Cloud Integration & Full Stack Developer",
       department: "Computer Science and Design",
       enrollment: "BTCD24O1048",
       session: "2024 - 2028",
@@ -126,6 +149,7 @@ const Developers = () => {
     },
     {
       name: "Sumit Singh Bhadoria",
+      role: "ML Logic & UI/UX Designer",
       department: "Computer Science and Design",
       enrollment: "BTCD24O1067",
       session: "2024 - 2028",
@@ -176,8 +200,8 @@ const Developers = () => {
         </div>
       </nav>
 
-      <main className="relative z-10 pt-40 pb-32 container mx-auto px-6 md:px-12">
-        <header className="text-center mb-24">
+      <main className="relative z-10 pt-28 pb-20 container mx-auto px-6 md:px-12">
+        <header className="text-center mb-10">
           <motion.div
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
@@ -198,16 +222,16 @@ const Developers = () => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2 }}
-            className="text-muted-foreground max-w-2xl mx-auto text-lg md:text-xl font-medium leading-relaxed"
+            className="text-muted-foreground max-w-2xl mx-auto text-base md:text-lg font-medium leading-relaxed"
           >
-            The engineers and visionary minds dedicated to securing 
-            digital communication through advanced neural interception.
+            The students and innovators crafting intelligent 
+            solutions to shield your communication from modern threats.
           </motion.p>
         </header>
 
         {/* Developers Section */}
         <section className="mb-40">
-          <div className="grid md:grid-cols-2 gap-12 max-w-5xl mx-auto">
+          <div className="grid lg:grid-cols-2 gap-10 max-w-7xl mx-auto">
             {developers.map((dev, i) => (
               <DeveloperCard key={dev.name} dev={dev} delay={0.3 + i * 0.1} />
             ))}
