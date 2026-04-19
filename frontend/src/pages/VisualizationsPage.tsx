@@ -53,7 +53,7 @@ const VisualizationsPage = () => {
     if (!chartImage) return;
     const link = document.createElement("a");
     link.href = `data:image/png;base64,${chartImage}`;
-    link.download = `spamguard_visualization_${metric}_${chartType}.png`;
+    link.download = `spam_email_detection_visualization_${metric}_${chartType}.png`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
